@@ -8,6 +8,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write # required for keyless cosign signing
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/dockerized-app-cicd
@@ -33,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build image
-        run: docker build -t "$IMAGE:${{ github.sha }}" .
+        run: docker build --build-arg APP_VERSION=${{ github.sha }} -t "$IMAGE:${{ github.sha }}" .
 
       - name: Trivy scan
         uses: aquasecurity/trivy-action@master
@@ -50,12 +51,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image
+      - name: Install cosign
+        if: github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Push and sign image
         if: github.ref == 'refs/heads/main'
         run: |
           docker tag "$IMAGE:${{ github.sha }}" "$IMAGE:latest"
           docker push "$IMAGE:${{ github.sha }}"
           docker push "$IMAGE:latest"
+          # Keyless signing with the GitHub OIDC token (no stored keys).
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:${{ github.sha }}")
+          cosign sign --yes "$DIGEST"
 
   deploy:
     needs: build-scan-push
@@ -65,4 +73,4 @@ jobs:
       - name: Deploy
         run: |
           echo "Deploy ${{ env.IMAGE }}:${{ github.sha }} to your host (Render/Fly/K8s)."
-          echo "Wire this step to your platform; image is published to GHCR."
+          echo "Wire this step to your platform; image is published + signed in GHCR."
